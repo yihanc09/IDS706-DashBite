@@ -1,4 +1,4 @@
-.PHONY: install test smoke-foundation simulator preprocess train infer dashboard run stop clean-data
+.PHONY: install test smoke-foundation simulator preprocess train infer dashboard run container-run stop clean-data docker-build docker-up docker-test docker-down docker-volume
 
 SHELL := /bin/sh
 LOG_DIR := .logs
@@ -53,6 +53,12 @@ run:
 	start_stage dashboard streamlit run dashboard/app.py --server.port 8501 --server.headless true; \
 	echo "DashBite is running; logs: $(LOG_DIR), PIDs: $(PID_DIR)"
 
+container-run:
+	cleanup() { trap - TERM INT EXIT; make stop; exit 0; }; \
+	trap cleanup TERM INT EXIT; \
+	make run; \
+	while :; do sleep 3600 & wait $$!; done
+
 stop:
 	if [ -d "$(PID_DIR)" ]; then \
 		for pid_file in "$(PID_DIR)"/*.pid; do \
@@ -71,3 +77,18 @@ stop:
 
 clean-data:
 	rm -rf data/raw data/features data/models data/predictions data/quality
+
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up -d
+
+docker-test:
+	docker compose run --rm test
+
+docker-down:
+	docker compose down
+
+docker-volume:
+	docker compose exec dashbite find /app/data -maxdepth 3 -type f -print

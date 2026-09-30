@@ -1,0 +1,34 @@
+services:
+  dashbite:
+    build: .
+    image: dashbite:local
+    command: ["make", "container-run"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - dashbite-data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 12
+
+  test:
+    profiles: ["test"]
+    image: dashbite:local
+    command: ["make", "test"]
+    volumes:
+      - dashbite-data:/app/data
+    depends_on:
+      dashbite:
+        condition: service_healthy
+
+volumes:
+  dashbite-data:
