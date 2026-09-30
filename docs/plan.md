@@ -651,6 +651,39 @@ Model Pulse workflow, the existing pytest suite must remain runnable, and
 pipeline artifacts under `data/` must survive container recreation through a
 Docker named volume.
 
+### Requirements
+
+- Provide a small Dockerfile that installs the existing Python project and its
+  test dependencies, then exposes the dashboard on port `8501`.
+- Provide Docker Compose configuration for the runtime application and a
+  one-shot containerized test command.
+- Preserve the current pipeline, dashboard, Makefile, and pytest interfaces;
+  containerization must be an execution and packaging concern.
+- Make persistent storage the primary container-readiness improvement by
+  mounting a Docker named volume at `/app/data` for all pipeline artifacts.
+- Include a practical Model Pulse healthcheck, explicit shutdown handling, and
+  a repeatable Docker test command as small supporting improvements.
+- Document build, start, test, health, persistence, shutdown, and destructive
+  cleanup commands in the README.
+
+### Existing architecture to preserve
+
+- `pipeline.simulator`, `pipeline.preprocess`, `pipeline.train`, and
+  `pipeline.infer` remain separate processes that communicate only through
+  filesystem artifacts under `data/`.
+- `pipeline.paths.DATA_ROOT` remains the authoritative data root. In the
+  container it resolves to `/app/data` because the project is installed and
+  run from `/app`; no stage-specific path rewrite or database adapter is
+  planned.
+- `dashboard.app` remains a read-only Model Pulse consumer of pipeline output;
+  it does not become the owner of orchestration or persistence.
+- The Makefile remains the public orchestration interface. The container may
+  call the existing `make run`/`container-run` flow, while local targets and
+  their filesystem contracts remain usable outside Docker.
+- The existing unit, regression, and integration test layout remains the
+  source of truth. Docker tests run that same suite rather than a separate
+  container-only implementation.
+
 ### Proposed changes
 
 - Add a `Dockerfile` based on a small supported Python image. Install the
@@ -670,9 +703,9 @@ Docker named volume.
   lifecycle, test command, and the warning that `docker compose down -v`
   removes persisted pipeline artifacts.
 - Add a Compose healthcheck for Model Pulse using its local Streamlit health
-  endpoint. The healthcheck is the additional container-readiness improvement:
-  it gives operators and smoke tests an explicit readiness state before
-  opening the dashboard.
+  endpoint. It gives operators and smoke tests an explicit readiness state
+  before opening the dashboard, while the named volume remains the primary
+  container-readiness improvement.
 
 ### Files to add or modify
 
@@ -709,6 +742,32 @@ Docker named volume.
 - Keep the container entrypoint and shutdown behavior simple and observable:
   logs remain available through `docker compose logs`, and stopping Compose
   must terminate the managed processes without changing stage ownership.
+
+### Risks and design concerns
+
+- `make run` supervises several long-lived processes through PID files. The
+  container command must forward termination to that orchestration and allow
+  enough shutdown time to avoid orphaned simulator, pipeline, or dashboard
+  processes.
+- A Streamlit healthcheck proves dashboard readiness, not end-to-end pipeline
+  freshness. Document that limitation rather than claiming that the health
+  endpoint validates every stage.
+- A shared named volume makes artifacts durable, but stale raw data or model
+  checkpoints can affect later demonstrations. Provide `docker compose down
+  -v` as an explicit full-reset command and warn that it deletes data.
+- The test service must not become dependent on live runtime artifacts. Keep
+  tests based on their existing temporary directories and isolate or avoid
+  volume contents where possible.
+- Dependency lower bounds may make builds vary over time. Keep the initial
+  assignment scope small; consider a constraints or lock file only if
+  reproducibility becomes a demonstrated problem.
+- Docker may be unavailable in some classroom or CI environments. The Python
+  test suite must remain runnable without Docker, and Docker-specific checks
+  should skip or be documented as environment-dependent rather than replacing
+  local tests.
+- Running the application processes as root and shipping test dependencies in
+  the runtime image are acceptable assignment tradeoffs for the first version,
+  but are separate hardening opportunities, not reasons to add infrastructure.
 
 ### Persistent storage strategy
 
