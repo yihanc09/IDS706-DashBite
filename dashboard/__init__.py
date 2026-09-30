@@ -1,0 +1,1 @@
+"""Model Pulse Streamlit application."""
