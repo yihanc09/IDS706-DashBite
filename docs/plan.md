@@ -640,3 +640,228 @@ tail -n 20 .logs/api.log
 ```sh
 make stop
 ```
+
+## Stage 7 — Containerization and Persistent Storage
+
+### Goal
+
+Containerize the existing DashBite classroom application without changing its
+filesystem-based stage boundaries. The image must run the current pipeline and
+Model Pulse workflow, the existing pytest suite must remain runnable, and
+pipeline artifacts under `data/` must survive container recreation through a
+Docker named volume.
+
+### Proposed changes
+
+- Add a `Dockerfile` based on a small supported Python image. Install the
+  package and its declared dependencies, copy the application source and
+  documentation needed by the image, expose Streamlit port `8501`, and use a
+  container command that keeps the existing `make run` process group alive.
+- Add `docker-compose.yml` with one runtime service for the complete existing
+  DashBite demo and one one-shot test service that uses the same built image.
+  Keep the pipeline stages as separate processes inside the runtime service,
+  communicating through the mounted `data/` directories as they do locally.
+- Add a `.dockerignore` for Python caches, local environments, logs, git
+  metadata, and other files that do not belong in the image.
+- Add Makefile targets or documented Compose commands for image build,
+  startup, containerized tests, shutdown, and named-volume inspection. Keep
+  the existing local targets unchanged.
+- Improve the README with the Docker workflow, service purpose, port, volume
+  lifecycle, test command, and the warning that `docker compose down -v`
+  removes persisted pipeline artifacts.
+- Add a Compose healthcheck for Model Pulse using its local Streamlit health
+  endpoint. The healthcheck is the additional container-readiness improvement:
+  it gives operators and smoke tests an explicit readiness state before
+  opening the dashboard.
+
+### Files to add or modify
+
+- Add `Dockerfile` for the reproducible Python runtime image.
+- Add `docker-compose.yml` defining the runtime service, test service, named
+  volume, port mapping, healthcheck, and shared environment.
+- Add `.dockerignore` to keep the build context focused.
+- Modify `Makefile` only as needed to expose concise Docker build, test, up,
+  down, and persistence-verification commands; preserve all current targets.
+- Modify `README.md` with Docker build/start/test/stop and persistence
+  instructions.
+- Do not modify `pipeline/`, `dashboard/`, or the existing tests unless a
+  narrowly scoped container compatibility issue is discovered during
+  implementation. No new database, broker, or application service is planned.
+
+### Docker architecture and service boundaries
+
+- Build one image containing the existing DashBite package, dependencies,
+  Makefile, and runtime source. The runtime Compose service launches the
+  existing `make run` orchestration so simulator, preprocessing, training,
+  inference, and Model Pulse remain separate processes with their current
+  file handoffs.
+- The runtime service maps host port `8501` to container port `8501` and uses
+  the named `data` volume at `/app/data`. The dashboard remains read-only with
+  respect to pipeline artifacts, as defined by the current architecture.
+- The test service reuses the same image and runs `make test` as a one-shot
+  command. It may mount the named volume for path compatibility, but tests
+  must continue to use their temporary directories and must not depend on
+  pre-existing volume contents.
+- Compose startup should wait for the runtime service to become healthy before
+  treating the application as ready. The healthcheck should call
+  `http://127.0.0.1:8501/_stcore/health` with a short interval, timeout, and
+  bounded retry count using tooling available in the image.
+- Keep the container entrypoint and shutdown behavior simple and observable:
+  logs remain available through `docker compose logs`, and stopping Compose
+  must terminate the managed processes without changing stage ownership.
+
+### Persistent storage strategy
+
+- Declare a Docker named volume, for example `dashbite-data`, and mount it at
+  `/app/data` for the runtime service. This preserves `raw/`, `features/`,
+  `models/`, `predictions/`, and `quality/` artifacts together because those
+  directories are the existing shared filesystem boundary.
+- Do not bind-mount the repository's host `data/` directory as the default
+  workflow; the named volume is the assignment's persistence mechanism and
+  works consistently across container recreation.
+- `docker compose down` must leave the named volume intact. `docker compose
+  down -v` is the explicit destructive cleanup command and must be documented
+  as deleting the persisted artifacts.
+- Verify persistence by creating or observing an artifact under
+  `/app/data`, stopping and recreating the runtime container without `-v`,
+  and confirming that the artifact remains. Volume inspection should use
+  `docker compose exec` or `docker volume inspect`, not application changes.
+
+### Automated tests
+
+- Preserve the complete existing suite and continue to run it with the local
+  command `make test`.
+- Add regression coverage only if implementation introduces public Makefile or
+  Compose naming contracts; such coverage should lock the documented Docker
+  service, volume, port, and test-command names without coupling tests to host
+  Docker state.
+- Add an integration or smoke check for the image build and Compose health
+  status only where the classroom environment provides Docker. Docker
+  availability checks should skip cleanly when Docker is unavailable rather
+  than weakening the existing Python test suite.
+- The Dockerfile build must install the package and dependencies successfully,
+  and the containerized test command must execute the same `pytest` suite as
+  `make test`.
+
+### Containerized test strategy
+
+Build the image once, then run the existing suite in the disposable test
+service:
+
+```sh
+docker compose build
+docker compose run --rm test
+```
+
+The test service should use the image's working directory and installed
+package exactly as the runtime service does. A passing result is the same
+pytest suite that `make test` runs locally; no alternate test collection or
+reduced marker selection is allowed.
+
+### Manual smoke test
+
+#### What we're proving
+
+The image starts the existing file-based DashBite demo, the dashboard becomes
+healthy, pipeline artifacts are written to the named volume, the test service
+passes, and artifacts remain after runtime container recreation.
+
+#### Terminal
+
+From the repository root:
+
+```sh
+docker compose build
+docker compose up -d
+docker compose ps
+docker compose run --rm test
+```
+
+Wait until the runtime service reports `healthy`, then open
+`http://localhost:8501` and inspect the service logs:
+
+```sh
+docker compose logs --tail=50 dashbite
+docker compose exec dashbite find /app/data -type f -maxdepth 3 -print
+```
+
+Recreate only the runtime container and verify the named volume retained the
+artifacts:
+
+```sh
+docker compose stop dashbite
+docker compose rm -f dashbite
+docker compose up -d dashbite
+docker compose exec dashbite find /app/data -type f -maxdepth 3 -print
+```
+
+#### Watch for
+
+- `docker compose ps` reports the runtime service as healthy, not merely
+  running.
+- Model Pulse is reachable on port `8501`.
+- Logs show the simulator, preprocessing, training, inference, and dashboard
+  processes communicating through files under `/app/data`.
+- The test service exits successfully and reports the existing pytest suite.
+- At least one file under `/app/data` is present before recreation and remains
+  present afterward.
+
+#### Stop
+
+```sh
+docker compose down
+```
+
+Leave the named volume in place for the persistence check. Use the explicit
+destructive cleanup only when the demo data should be removed:
+
+```sh
+docker compose down -v
+```
+
+### Expected commands
+
+Build the image:
+
+```sh
+docker compose build
+```
+
+Start the application in the background:
+
+```sh
+docker compose up -d
+```
+
+Run the existing tests inside Docker:
+
+```sh
+docker compose run --rm test
+```
+
+Follow logs and inspect readiness:
+
+```sh
+docker compose logs -f dashbite
+docker compose ps
+```
+
+Stop the containers while preserving the named volume:
+
+```sh
+docker compose down
+```
+
+Verify the named volume and its persisted files:
+
+```sh
+docker volume ls
+docker compose exec dashbite find /app/data -type f -maxdepth 3 -print
+```
+
+Remove containers and persisted data only for a full reset:
+
+```sh
+docker compose down -v
+```
+
