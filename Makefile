@@ -68,6 +68,15 @@ stop:
 				if kill -0 "$$pid" 2>/dev/null; then \
 					echo "Stopping $$(basename "$$pid_file" .pid) (PID $$pid)"; \
 					kill "$$pid" 2>/dev/null || true; \
+					attempt=0; \
+					while kill -0 "$$pid" 2>/dev/null && [ "$$attempt" -lt 10 ]; do \
+						sleep 1; \
+						attempt=$$((attempt + 1)); \
+					done; \
+					if kill -0 "$$pid" 2>/dev/null; then \
+						echo "Force-stopping $$(basename "$$pid_file" .pid) (PID $$pid)"; \
+						kill -KILL "$$pid" 2>/dev/null || true; \
+					fi; \
 				fi ;; \
 			esac; \
 			rm -f "$$pid_file"; \
