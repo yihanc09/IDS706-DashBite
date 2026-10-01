@@ -210,8 +210,7 @@ The container workflow preserves the application's existing process ownership an
 
 These improvements make the application easier to reproduce, test, operate, and stop safely in a containerized environment.
 
-##
-Manual Smoke Test
+## Manual Smoke Test
 
 After completing and reviewing the Builder implementation, I manually tested the project before beginning the Tester stage.
 
